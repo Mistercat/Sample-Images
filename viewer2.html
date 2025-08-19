@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Prompt Comparison Viewer (Local)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root { --thumb: 220px; --gap: 10px; --pad: 12px; --bg:#0f1115; --fg:#e8e8e8; --dim:#a8a8a8; --acc:#8ab4ff; }
+  body { margin:0; font:14px/1.35 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:var(--bg); color:var(--fg);}
+  header { position:sticky; top:0; z-index:5; background:#12151c; border-bottom:1px solid #222; padding:10px 12px; display:flex; gap:10px; align-items:center; flex-wrap:wrap;}
+  header h1 { font-size:16px; margin:0 10px 0 0; color:#ddd; }
+  .group { display:flex; gap:8px; align-items:center; }
+  input[type="file"] { color:var(--dim); }
+  button { background:#1b2533; color:#eee; border:1px solid #2a3a55; padding:6px 10px; border-radius:8px; cursor:pointer;}
+  button:hover { background:#233046; }
+  .status { margin-left:auto; color:var(--dim); }
+  .container { padding:12px; }
+  .row { border:1px solid #222; border-radius:10px; padding:10px; margin:10px 0; background:#131722;}
+  .row h3 { margin:0 0 6px 0; font-size:14px; color:#ddd; }
+  .prompt-text { color:#bbb; margin:4px 0 8px 0; white-space:pre-wrap; }
+  .grid { display:grid; gap:var(--gap); grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+  .card { border:1px solid #233; border-radius:10px; padding:8px; background:#10151f; }
+  .model { font-weight:600; color:#cfe1ff; margin:0 0 6px 0; }
+  .thumbs { display:flex; flex-wrap:wrap; gap:6px; }
+  .thumbs a { display:inline-block; border-radius:8px; overflow:hidden; border:1px solid #2a2f3b;}
+  .thumbs img { display:block; max-height: var(--thumb); max-width: 100%; }
+  .controls { display:flex; gap:8px; align-items:center; padding:8px 12px; position:sticky; bottom:0; background:#0f131b; border-top:1px solid #222;}
+  .spacer { flex:1; }
+  .small { color:var(--dim); font-size:12px; }
+  .pill { padding:2px 8px; border-radius:999px; border:1px solid #2a3a55; color:#cfe1ff; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Prompt Comparison Viewer (Local)</h1>
+  <div class="group">
+    <label class="pill">DB:</label>
+    <input id="dbFile" type="file" accept=".sqlite,.db,.sqlite3" />
+  </div>
+  <div class="group">
+    <label class="pill">Images:</label>
+    <input id="imgDir" type="file" webkitdirectory directory multiple />
+  </div>
+  <button id="rescanBtn">🔄 Rescan</button>
+  <div class="group small">
+    Thumbs:
+    <input id="thumbSize" type="range" min="120" max="360" step="20" value="220" />
+    <span id="thumbVal">220px</span>
+  </div>
+  <div class="status" id="status">DB: none • Images: 0</div>
+</header>
+
+<div class="container" id="content"></div>
+
+<div class="controls">
+  <button id="prevBtn">◀ Prev</button>
+  <button id="nextBtn">Next ▶</button>
+  <div class="spacer"></div>
+  <span id="pageInfo" class="small">Page 1 / 1</span>
+  <div class="group small">
+    Page size:
+    <input id="pageSize" type="number" min="5" max="200" step="5" value="20" />
+  </div>
+</div>
+
+<script>
+/* ---------- sql.js bootstrap (load once, await ready) ---------- */
+const SQL_WASM_CDN = "https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.2/sql-wasm.wasm";
+let SQL = null;
+const SQL_READY = new Promise((resolve, reject) => {
+  const s = document.createElement('script');
+  s.src = "https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.2/sql-wasm.js";
+  s.onerror = () => reject(new Error("Failed to load sql-wasm.js"));
+  s.onload = async () => {
+    try {
+      SQL = await initSqlJs({ locateFile: () => SQL_WASM_CDN });
+      resolve(SQL);
+    } catch (e) { reject(e); }
+  };
+  document.head.appendChild(s);
+});
+
+/* ------------------ State ------------------ */
+let db = null;                 // SQL.Database
+let promptMap = new Map();     // id -> prompt_text
+let files = [];                // File[] (images)
+let urlByFile = new Map();     // File -> objectURL
+let byPrompt = new Map();      // pid -> Map(model -> File[])
+let modelsSorted = [];         // discovered models
+let promptIds = [];            // sorted pids
+let page = 0;
+let pageSize = 20;
+
+/* ------------------ Helpers ------------------ */
+const re = /^(?<model>.+)-id_(?<id>\d+)_seed_(?<seed>\d+)_\d+_\.png$/i;
+
+function setStatus(txt){
+  document.getElementById('status').textContent = txt;
+}
+function setThumb(px){
+  document.documentElement.style.setProperty('--thumb', px+"px");
+  document.getElementById('thumbVal').textContent = px+"px";
+}
+
+/* ------------------ DB load ------------------ */
+async function loadDb(file){
+  // wait for sql.js
+  try { await SQL_READY; } catch(e){ alert("sql.js failed to load."); return; }
+  const buf = new Uint8Array(await file.arrayBuffer());
+  if (db) { try { db.close(); } catch(_){} }
+  db = new SQL.Database(buf);
+  promptMap.clear();
+
+  try {
+    const res = db.exec("SELECT id, prompt_text FROM prompts");
+    if (res.length){
+      const cols = res[0].columns;
+      const idxId = cols.indexOf('id');
+      const idxText = cols.indexOf('prompt_text');
+      for (const row of res[0].values){
+        const pid = Number(row[idxId]);
+        const text = String(row[idxText] ?? "");
+        promptMap.set(pid, text);
+      }
+    }
+  } catch (err){
+    console.error(err);
+    alert("Could not read prompts(id, prompt_text) from DB.");
+  }
+}
+
+/* ------------------ Index files ------------------ */
+function indexFiles(){
+  byPrompt.clear();
+  const modelSet = new Set();
+  for (const f of files){
+    const m = re.exec(f.name);
+    if (!m) continue;
+    const model = m.groups.model;
+    const pid = Number(m.groups.id);
+    modelSet.add(model);
+    if (!byPrompt.has(pid)) byPrompt.set(pid, new Map());
+    const mm = byPrompt.get(pid);
+    if (!mm.has(model)) mm.set(model, []);
+    mm.get(model).push(f);
+  }
+  modelsSorted = Array.from(modelSet).sort((a,b)=> a.localeCompare(b));
+  promptIds = Array.from(byPrompt.keys()).sort((a,b)=> a-b);
+}
+
+/* ------------------ Render ------------------ */
+function render(){
+  const content = document.getElementById('content');
+  content.innerHTML = "";
+  const totalPages = Math.max(1, Math.ceil(promptIds.length / pageSize));
+  if (page >= totalPages) page = totalPages-1;
+  const start = page * pageSize;
+  const end = Math.min(promptIds.length, start + pageSize);
+  document.getElementById('pageInfo').textContent = `Page ${page+1} / ${totalPages}`;
+
+  for (let i = start; i < end; i++){
+    const pid = promptIds[i];
+    const models = byPrompt.get(pid);
+    const row = document.createElement('div'); row.className = 'row';
+
+    const h = document.createElement('h3');
+    h.textContent = `Prompt ID: ${pid}`;
+    row.appendChild(h);
+
+    const ptxt = promptMap.get(pid);
+    if (ptxt){
+      const p = document.createElement('div');
+      p.className = 'prompt-text';
+      p.textContent = ptxt;
+      row.appendChild(p);
+    }
+
+    const grid = document.createElement('div'); grid.className = 'grid';
+    for (const model of modelsSorted){
+      const arr = models.get(model);
+      if (arr && arr.length){
+        const card = document.createElement('div'); card.className = 'card';
+        const title = document.createElement('div'); title.className = 'model'; title.textContent = model;
+        card.appendChild(title);
+
+        const thumbs = document.createElement('div'); thumbs.className = 'thumbs';
+        arr.sort((a,b)=> a.name.localeCompare(b.name));
+        for (const f of arr){
+          let url = urlByFile.get(f);
+          if (!url){ url = URL.createObjectURL(f); urlByFile.set(f, url); }
+          const a = document.createElement('a'); a.href = url; a.target = "_blank"; a.title = f.name;
+          const img = document.createElement('img'); img.src = url; img.loading="lazy";
+          a.appendChild(img);
+          thumbs.appendChild(a);
+        }
+        card.appendChild(thumbs);
+        grid.appendChild(card);
+      }
+    }
+    row.appendChild(grid);
+    content.appendChild(row);
+  }
+
+  setStatus(`DB: ${db ? 'loaded' : 'none'} • Images: ${files.length} • Models: ${modelsSorted.length} • Prompts: ${promptIds.length}`);
+}
+
+/* ------------------ Events ------------------ */
+document.getElementById('dbFile').addEventListener('change', async (e)=>{
+  const f = e.target.files?.[0];
+  if (!f) return;
+  await loadDb(f);
+  render(); // show prompt text once DB is in
+});
+
+document.getElementById('imgDir').addEventListener('change', async (e)=>{
+  files = Array.from(e.target.files || []).filter(f => f.name.toLowerCase().endsWith(".png"));
+  // clear old object URLs
+  for (const url of urlByFile.values()) URL.revokeObjectURL(url);
+  urlByFile.clear();
+  indexFiles();
+  page = 0;
+  render();
+});
+
+document.getElementById('rescanBtn').addEventListener('click', ()=>{
+  // Rebuild index from the currently loaded FileList
+  indexFiles();
+  render();
+});
+
+document.getElementById('prevBtn').addEventListener('click', ()=>{
+  if (page > 0){ page--; render(); }
+});
+document.getElementById('nextBtn').addEventListener('click', ()=>{
+  const totalPages = Math.max(1, Math.ceil(promptIds.length / pageSize));
+  if (page+1 < totalPages){ page++; render(); }
+});
+document.getElementById('pageSize').addEventListener('change', (e)=>{
+  const v = Number(e.target.value || 20);
+  pageSize = Math.max(5, Math.min(200, v));
+  page = 0;
+  render();
+});
+document.getElementById('thumbSize').addEventListener('input', (e)=>{
+  setThumb(Number(e.target.value));
+});
+
+/* ------------------ Init ------------------ */
+setThumb(220);
+setStatus("DB: none • Images: 0");
+</script>
+</body>
+</html>
