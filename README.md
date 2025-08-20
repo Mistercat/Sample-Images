@@ -27,15 +27,13 @@ Prompt #17: A violinist playing on the back of a flying whale stitched from clou
 1. Clone the repo:
    git clone https://github.com/Mistercat/Sample-Images.git
    cd Sample-Images
-Open viewer2.html in a browser to explore the dataset.
-At the top of the page select the db file and then the image folder.
+2. Open viewer2.html in a browser to explore the dataset.
+3. At the top of the page select the db file and then the image folder.
+
 Prompts are displayed alongside the generated outputs for each model.
 
-Query the database (yakudb.sqlite) to search/filter prompts and outputs:
+Query the database (db.sqlite) to search/filter prompts and outputs:
 
-sql
-Copy
-Edit
 SELECT prompt_text, model_name, image_file
 FROM generations
 WHERE prompt_id = 17;
@@ -49,3 +47,4 @@ Benchmarking: Useful for testing prompt adherence and model behavior regressions
 
 Creative gallery: Also just fun to browse — many generations are striking on their own.
 
+Development on related project nl-comfy, a tool to automate comfyui workflows.
