@@ -26,9 +26,9 @@ Prompt #17: A violinist playing on the back of a flying whale stitched from clou
 
 1. Clone the repo:
    git clone https://github.com/Mistercat/Sample-Images.git
-   cd Sample-Images
-2. Open viewer2.html in a browser to explore the dataset.
-3. At the top of the page select the db file and then the image folder.
+2. cd Sample-Images
+3. Open viewer2.html in a browser to explore the dataset.
+4. At the top of the page select the db file and then the image folder.
 
 Prompts are displayed alongside the generated outputs for each model.
 
