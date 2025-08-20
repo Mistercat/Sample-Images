@@ -8,3 +8,9 @@ ability to closely conform to the prompt.
 
 drag viewer2.html to your browser.
 select the db file and then the image folder.
+
+## Example Output
+
+Prompt #17: A violinist playing on the back of a flying whale stitched from clouds and moss.
+
+![Prompt 17 Example](Example.png)
