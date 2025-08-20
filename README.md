@@ -34,9 +34,9 @@ Prompts are displayed alongside the generated outputs for each model.
 
 Query the database (db.sqlite) to search/filter prompts and outputs:
 
-SELECT prompt_text, model_name, image_file
-FROM generations
-WHERE prompt_id = 17;
+SELECT prompt_text, id
+FROM prompts
+WHERE id = 17;
 
 Why This Dataset?
 Prompt diversity: Covers a wide range of themes and instructions (realism, surrealism, composition tests).
