@@ -64,7 +64,7 @@
 </div>
 
 <script>
-/* ---------- sql.js bootstrap (load once, await ready) ---------- */
+/* ---------- sql.js bootstrap (CDN) ---------- */
 const SQL_WASM_CDN = "https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.2/sql-wasm.wasm";
 let SQL = null;
 const SQL_READY = new Promise((resolve, reject) => {
@@ -81,9 +81,9 @@ const SQL_READY = new Promise((resolve, reject) => {
 });
 
 /* ------------------ State ------------------ */
-let db = null;                 // SQL.Database
+let db = null;
 let promptMap = new Map();     // id -> prompt_text
-let files = [];                // File[] (images)
+let files = [];                // File[] (images/gifs)
 let urlByFile = new Map();     // File -> objectURL
 let byPrompt = new Map();      // pid -> Map(model -> File[])
 let modelsSorted = [];         // discovered models
@@ -92,19 +92,26 @@ let page = 0;
 let pageSize = 20;
 
 /* ------------------ Helpers ------------------ */
-const re = /^(?<model>.+)-id_(?<id>\d+)_seed_(?<seed>\d+)_\d+_\.png$/i;
+// Allow stills + GIFs
+const ALLOWED_EXTS = [".png", ".jpg", ".jpeg", ".webp", ".gif"];
 
-function setStatus(txt){
-  document.getElementById('status').textContent = txt;
-}
+// RELAXED pattern:
+//  <model>-id_<id>_seed_<seed> [ _<digits> | _<00000-00119> ] [ _ ] .<ext>
+//  The trailing index/range is OPTIONAL; some video savers emit just .gif after seed.
+const RE_MAIN = /^(?<model>.+)-id_(?<id>\d+)_seed_(?<seed>[^_.]+)(?:_(?:\d+|[\d-]+))?(?:_)?\.(png|jpg|jpeg|webp|gif)$/i;
+
+function setStatus(txt){ document.getElementById('status').textContent = txt; }
 function setThumb(px){
   document.documentElement.style.setProperty('--thumb', px+"px");
   document.getElementById('thumbVal').textContent = px+"px";
 }
+function hasAllowedExt(name){
+  const n = name.toLowerCase();
+  return ALLOWED_EXTS.some(ext => n.endsWith(ext));
+}
 
 /* ------------------ DB load ------------------ */
 async function loadDb(file){
-  // wait for sql.js
   try { await SQL_READY; } catch(e){ alert("sql.js failed to load."); return; }
   const buf = new Uint8Array(await file.arrayBuffer());
   if (db) { try { db.close(); } catch(_){} }
@@ -133,17 +140,24 @@ async function loadDb(file){
 function indexFiles(){
   byPrompt.clear();
   const modelSet = new Set();
+
   for (const f of files){
-    const m = re.exec(f.name);
+    const name = f.name;
+    if (!hasAllowedExt(name)) continue;
+
+    const m = RE_MAIN.exec(name);
     if (!m) continue;
+
     const model = m.groups.model;
     const pid = Number(m.groups.id);
+
     modelSet.add(model);
     if (!byPrompt.has(pid)) byPrompt.set(pid, new Map());
     const mm = byPrompt.get(pid);
     if (!mm.has(model)) mm.set(model, []);
     mm.get(model).push(f);
   }
+
   modelsSorted = Array.from(modelSet).sort((a,b)=> a.localeCompare(b));
   promptIds = Array.from(byPrompt.keys()).sort((a,b)=> a-b);
 }
@@ -209,11 +223,12 @@ document.getElementById('dbFile').addEventListener('change', async (e)=>{
   const f = e.target.files?.[0];
   if (!f) return;
   await loadDb(f);
-  render(); // show prompt text once DB is in
+  render();
 });
 
 document.getElementById('imgDir').addEventListener('change', async (e)=>{
-  files = Array.from(e.target.files || []).filter(f => f.name.toLowerCase().endsWith(".png"));
+  const list = Array.from(e.target.files || []);
+  files = list.filter(f => hasAllowedExt(f.name));
   // clear old object URLs
   for (const url of urlByFile.values()) URL.revokeObjectURL(url);
   urlByFile.clear();
@@ -223,7 +238,6 @@ document.getElementById('imgDir').addEventListener('change', async (e)=>{
 });
 
 document.getElementById('rescanBtn').addEventListener('click', ()=>{
-  // Rebuild index from the currently loaded FileList
   indexFiles();
   render();
 });
@@ -251,3 +265,4 @@ setStatus("DB: none • Images: 0");
 </script>
 </body>
 </html>
+
